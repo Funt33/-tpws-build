@@ -1,4 +1,4 @@
-name: Build tpws for MIPS big-endian
+name: Get tpws for MIPS big-endian
 on:
   workflow_dispatch:
   push:
@@ -7,74 +7,34 @@ on:
 permissions:
   contents: read
 jobs:
-  build-tpws-mips:
+  fetch-tpws:
     runs-on: ubuntu-latest
     steps:
-      - name: Install basic tools
+      - name: Download prebuilt tpws from zapret release
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y wget file
-
-      - name: Clone zapret
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone --depth 1 https://github.com/bol-van/zapret.git zapret
-
-      - name: Install MIPS big-endian musl toolchain (robust download)
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Downloading toolchain (up to 10 retries)..."
-          wget --tries=10 --waitretry=5 --timeout=30 -O /tmp/mips-linux-musl-cross.tgz https://musl.cc/mips-linux-musl-cross.tgz
-          echo "Extracting..."
-          tar -xzf /tmp/mips-linux-musl-cross.tgz -C /tmp
-          
-          # Находим папку с компилятором (имя может немного отличаться)
-          TOOLCHAIN_BIN=$(find /tmp -type f -name "mips-linux-musl-gcc" -exec dirname {} \; | head -n 1)
-          if [ -z "$TOOLCHAIN_BIN" ]; then
-            echo "ERROR: Compiler not found!" >&2
-            exit 1
+          URL=$(curl -s https://api.github.com/repos/bol-van/zapret/releases/latest \
+                | grep -oE 'https://github.com/bol-van/zapret/releases/download/[^"]+\.tar\.gz' \
+                | head -n1)
+          echo "Asset: $URL"
+          test -n "$URL"
+          wget -q "$URL" -O /tmp/zapret.tar.gz
+          mkdir -p /tmp/z && tar -C /tmp/z -xzf /tmp/zapret.tar.gz
+          DIR=$(find /tmp/z -maxdepth 1 -type d -name 'zapret-v*')
+          test -f "$DIR/binaries/linux-mips/tpws"
+          cp "$DIR/binaries/linux-mips/tpws" tpws-mips-msb
+          chmod +x tpws-mips-msb
+          file tpws-mips-msb
+          if ! file tpws-mips-msb | grep -q "MSB"; then
+            echo "ERROR: not big-endian!" >&2; exit 1
           fi
-          
-          echo "Toolchain path: $TOOLCHAIN_BIN"
-          echo "$TOOLCHAIN_BIN" >> $GITHUB_PATH
-          mips-linux-musl-gcc --version
-
-      - name: Build tpws statically (direct gcc, no make, no zlib)
-        shell: bash
-        working-directory: zapret/tpws
-        run: |
-          set -euo pipefail
-          echo "Compiling tpws..."
-          mips-linux-musl-gcc -Os -static -I. -o tpws *.c
-          test -f tpws
-          
-          echo "Verifying binary..."
-          file tpws
-          if ! file tpws | grep -q "MSB"; then
-            echo "ERROR: Not big-endian!" >&2; exit 1
-          fi
-          if file tpws | grep -q "dynamically"; then
-            echo "ERROR: Not static!" >&2; exit 1
-          fi
-
-      - name: Strip and package
-        shell: bash
-        working-directory: zapret/tpws
-        run: |
-          set -euo pipefail
-          mips-linux-musl-strip --strip-all tpws
-          ls -lh tpws
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp tpws "$GITHUB_WORKSPACE/dist/tpws-mips-msb"
+          ls -lh tpws-mips-msb
 
       - name: Upload tpws artifact
         uses: actions/upload-artifact@v4
         with:
           name: tpws-mips-msb
-          path: dist/tpws-mips-msb
+          path: tpws-mips-msb
           if-no-files-found: error
           retention-days: 30

@@ -10,12 +10,12 @@ jobs:
   build-tpws-mips:
     runs-on: ubuntu-latest
     steps:
-      - name: Install MIPS big-endian cross compiler from apt
+      - name: Install basic tools
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mips-linux-gnu binutils-mips-linux-gnu file
+          sudo apt-get install -y wget file
 
       - name: Clone zapret
         shell: bash
@@ -23,19 +23,42 @@ jobs:
           set -euo pipefail
           git clone --depth 1 https://github.com/bol-van/zapret.git zapret
 
+      - name: Install MIPS big-endian musl toolchain (robust download)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Downloading toolchain (up to 10 retries)..."
+          wget --tries=10 --waitretry=5 --timeout=30 -O /tmp/mips-linux-musl-cross.tgz https://musl.cc/mips-linux-musl-cross.tgz
+          echo "Extracting..."
+          tar -xzf /tmp/mips-linux-musl-cross.tgz -C /tmp
+          
+          # Находим папку с компилятором (имя может немного отличаться)
+          TOOLCHAIN_BIN=$(find /tmp -type f -name "mips-linux-musl-gcc" -exec dirname {} \; | head -n 1)
+          if [ -z "$TOOLCHAIN_BIN" ]; then
+            echo "ERROR: Compiler not found!" >&2
+            exit 1
+          fi
+          
+          echo "Toolchain path: $TOOLCHAIN_BIN"
+          echo "$TOOLCHAIN_BIN" >> $GITHUB_PATH
+          mips-linux-musl-gcc --version
+
       - name: Build tpws statically (direct gcc, no make, no zlib)
         shell: bash
         working-directory: zapret/tpws
         run: |
           set -euo pipefail
-          mips-linux-gnu-gcc -Os -static -pthread -I. -o tpws *.c -lpthread
+          echo "Compiling tpws..."
+          mips-linux-musl-gcc -Os -static -I. -o tpws *.c
           test -f tpws
+          
+          echo "Verifying binary..."
           file tpws
           if ! file tpws | grep -q "MSB"; then
-            echo "Not big-endian!" >&2; exit 1
+            echo "ERROR: Not big-endian!" >&2; exit 1
           fi
           if file tpws | grep -q "dynamically"; then
-            echo "Not static!" >&2; exit 1
+            echo "ERROR: Not static!" >&2; exit 1
           fi
 
       - name: Strip and package
@@ -43,7 +66,7 @@ jobs:
         working-directory: zapret/tpws
         run: |
           set -euo pipefail
-          mips-linux-gnu-strip --strip-all tpws
+          mips-linux-musl-strip --strip-all tpws
           ls -lh tpws
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp tpws "$GITHUB_WORKSPACE/dist/tpws-mips-msb"

@@ -43,61 +43,39 @@ jobs:
             --output "$RUNNER_TEMP/mips-linux-musl-cross.tgz"
           tar -xzf "$RUNNER_TEMP/mips-linux-musl-cross.tgz" \
             -C "$RUNNER_TEMP/musl"
-
           TOOLCHAIN_DIR="$(find "$RUNNER_TEMP/musl" -type f \
             -name 'mips-linux-musl-gcc' -printf '%h\n' | head -n 1)"
-          if [ -z "$TOOLCHAIN_DIR" ]; then
-            echo "MIPS compiler was not found in the archive" >&2
-            find "$RUNNER_TEMP/musl" -maxdepth 5 -type f | sort >&2
-            exit 1
-          fi
-
           TOOLCHAIN_BIN="$(dirname "$TOOLCHAIN_DIR")"
           echo "$TOOLCHAIN_BIN" >> "$GITHUB_PATH"
-          echo "MIPS_TOOLCHAIN_BIN=$TOOLCHAIN_BIN" >> "$GITHUB_ENV"
-          echo "Using toolchain directory: $TOOLCHAIN_BIN"
           "$TOOLCHAIN_DIR/mips-linux-musl-gcc" --version
 
       - name: Build tpws statically
         shell: bash
         working-directory: zapret/tpws
-        env:
-          CC: mips-linux-musl-gcc
         run: |
           set -euo pipefail
           make clean || true
-          make \
-            CC="$CC" \
-            CFLAGS="-Os -static" \
-            LDFLAGS="-static -Wl,--gc-sections" \
-            LIBS="-lz -lpthread"
-
+          make CC=mips-linux-musl-gcc LDFLAGS="-static"
           test -f tpws
-          "$CC" -dumpmachine
           file tpws
-          readelf -h tpws
           if readelf -h tpws | grep -Eq 'Data:.*little endian|LSB'; then
-            echo "The produced binary is little-endian, but MIPS MSB was requested" >&2
+            echo "Binary is little-endian, MSB required" >&2
             exit 1
           fi
 
       - name: Strip and validate binary
         shell: bash
         working-directory: zapret/tpws
-        env:
-          STRIP: mips-linux-musl-strip
         run: |
           set -euo pipefail
-          "$STRIP" --strip-all tpws
+          mips-linux-musl-strip --strip-all tpws
           file tpws
-          readelf -h tpws | grep -E 'Class:|Data:|Machine:'
           if readelf -l tpws | grep -q 'INTERP'; then
-            echo "The binary is dynamically linked; static linking failed" >&2
+            echo "Binary is dynamically linked" >&2
             exit 1
           fi
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp tpws "$GITHUB_WORKSPACE/dist/tpws-mips-msb"
-          sha256sum "$GITHUB_WORKSPACE/dist/tpws-mips-msb"
 
       - name: Upload tpws artifact
         uses: actions/upload-artifact@v4

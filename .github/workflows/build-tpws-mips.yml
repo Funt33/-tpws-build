@@ -1,31 +1,21 @@
 name: Build tpws for MIPS big-endian
-
 on:
   workflow_dispatch:
   push:
     paths:
       - ".github/workflows/build-tpws-mips.yml"
-
 permissions:
   contents: read
-
 jobs:
   build-tpws-mips:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout workflow repository
-        uses: actions/checkout@v4
-
       - name: Install build dependencies
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ca-certificates \
-            make \
-            binutils
+          sudo apt-get install -y --no-install-recommends ca-certificates make binutils file
 
       - name: Clone zapret
         shell: bash
@@ -41,39 +31,33 @@ jobs:
           curl --fail --show-error --location --retry 3 \
             https://musl.cc/mips-linux-musl-cross.tgz \
             --output "$RUNNER_TEMP/mips-linux-musl-cross.tgz"
-          tar -xzf "$RUNNER_TEMP/mips-linux-musl-cross.tgz" \
-            -C "$RUNNER_TEMP/musl"
-          TOOLCHAIN_DIR="$(find "$RUNNER_TEMP/musl" -type f \
-            -name 'mips-linux-musl-gcc' -printf '%h\n' | head -n 1)"
-          TOOLCHAIN_BIN="$(dirname "$TOOLCHAIN_DIR")"
+          tar -xzf "$RUNNER_TEMP/mips-linux-musl-cross.tgz" -C "$RUNNER_TEMP/musl"
+          TOOLCHAIN_BIN="$(find "$RUNNER_TEMP/musl" -type d -name bin | head -n 1)"
           echo "$TOOLCHAIN_BIN" >> "$GITHUB_PATH"
-          "$TOOLCHAIN_DIR/mips-linux-musl-gcc" --version
+          "$TOOLCHAIN_BIN/mips-linux-musl-gcc" --version
 
-      - name: Build tpws statically
+      - name: Build tpws statically (direct gcc, no make)
         shell: bash
         working-directory: zapret/tpws
         run: |
           set -euo pipefail
-          make clean || true
-          make CC=mips-linux-musl-gcc LDFLAGS="-static"
+          mips-linux-musl-gcc -Os -static -I. -o tpws *.c
           test -f tpws
           file tpws
-          if readelf -h tpws | grep -Eq 'Data:.*little endian|LSB'; then
-            echo "Binary is little-endian, MSB required" >&2
-            exit 1
+          if ! file tpws | grep -q "MSB"; then
+            echo "Not big-endian!" >&2; exit 1
+          fi
+          if file tpws | grep -q "dynamically"; then
+            echo "Not static!" >&2; exit 1
           fi
 
-      - name: Strip and validate binary
+      - name: Strip and package
         shell: bash
         working-directory: zapret/tpws
         run: |
           set -euo pipefail
           mips-linux-musl-strip --strip-all tpws
-          file tpws
-          if readelf -l tpws | grep -q 'INTERP'; then
-            echo "Binary is dynamically linked" >&2
-            exit 1
-          fi
+          ls -lh tpws
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp tpws "$GITHUB_WORKSPACE/dist/tpws-mips-msb"
 
